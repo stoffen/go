@@ -189,7 +189,7 @@ func (obj *object) sameId(pkg *Package, name string) bool {
 //
 // Objects are ordered nil before non-nil, exported before
 // non-exported, then by name, and finally (for non-exported
-// functions) by package height and path.
+// functions) by package path.
 func (a *object) less(b *object) bool {
 	if a == b {
 		return false
@@ -215,9 +215,6 @@ func (a *object) less(b *object) bool {
 		return a.name < b.name
 	}
 	if !ea {
-		if a.pkg.height != b.pkg.height {
-			return a.pkg.height < b.pkg.height
-		}
 		return a.pkg.path < b.pkg.path
 	}
 
@@ -279,19 +276,7 @@ func NewTypeName(pos syntax.Pos, pkg *Package, name string, typ Type) *TypeName 
 // lazily calls resolve to finish constructing the Named object.
 func NewTypeNameLazy(pos syntax.Pos, pkg *Package, name string, load func(named *Named) (tparams []*TypeParam, underlying Type, methods []*Func)) *TypeName {
 	obj := NewTypeName(pos, pkg, name, nil)
-
-	resolve := func(_ *Context, t *Named) (*TypeParamList, Type, *methodList) {
-		tparams, underlying, methods := load(t)
-
-		switch underlying.(type) {
-		case nil, *Named:
-			panic(fmt.Sprintf("invalid underlying type %T", t.underlying))
-		}
-
-		return bindTParams(tparams), underlying, newMethodList(methods)
-	}
-
-	NewNamed(obj, nil, nil).resolver = resolve
+	NewNamed(obj, nil, nil).loader = load
 	return obj
 }
 
@@ -300,6 +285,8 @@ func (obj *TypeName) IsAlias() bool {
 	switch t := obj.typ.(type) {
 	case nil:
 		return false
+	// case *Alias:
+	//	handled by default case
 	case *Basic:
 		// unsafe.Pointer is not an alias.
 		if obj.pkg == Unsafe {
@@ -421,6 +408,12 @@ func (obj *Func) Origin() *Func {
 	return obj
 }
 
+// Pkg returns the package to which the function belongs.
+//
+// The result is nil for methods of types in the Universe scope,
+// like method Error of the error built-in interface type.
+func (obj *Func) Pkg() *Package { return obj.object.Pkg() }
+
 // hasPtrRecv reports whether the receiver is of the form *T for the given method obj.
 func (obj *Func) hasPtrRecv() bool {
 	// If a method's receiver type is set, use that as the source of truth for the receiver.
@@ -527,7 +520,7 @@ func writeObject(buf *bytes.Buffer, obj Object, qf Qualifier) {
 
 	// For package-level objects, qualify the name.
 	if obj.Pkg() != nil && obj.Pkg().scope.Lookup(obj.Name()) == obj {
-		writePackage(buf, obj.Pkg(), qf)
+		buf.WriteString(packagePrefix(obj.Pkg(), qf))
 	}
 	buf.WriteString(obj.Name())
 
@@ -568,9 +561,9 @@ func writeObject(buf *bytes.Buffer, obj Object, qf Qualifier) {
 	WriteType(buf, typ, qf)
 }
 
-func writePackage(buf *bytes.Buffer, pkg *Package, qf Qualifier) {
+func packagePrefix(pkg *Package, qf Qualifier) string {
 	if pkg == nil {
-		return
+		return ""
 	}
 	var s string
 	if qf != nil {
@@ -579,9 +572,9 @@ func writePackage(buf *bytes.Buffer, pkg *Package, qf Qualifier) {
 		s = pkg.Path()
 	}
 	if s != "" {
-		buf.WriteString(s)
-		buf.WriteByte('.')
+		s += "."
 	}
+	return s
 }
 
 // ObjectString returns the string form of obj.
@@ -619,7 +612,7 @@ func writeFuncName(buf *bytes.Buffer, f *Func, qf Qualifier) {
 			buf.WriteByte(')')
 			buf.WriteByte('.')
 		} else if f.pkg != nil {
-			writePackage(buf, f.pkg, qf)
+			buf.WriteString(packagePrefix(f.pkg, qf))
 		}
 	}
 	buf.WriteString(f.name)
