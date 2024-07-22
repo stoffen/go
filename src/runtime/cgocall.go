@@ -228,44 +228,18 @@ func cgocall(fn, arg unsafe.Pointer) int32 {
 // the M.
 //
 //go:nosplit
-func callbackUpdateSystemStack(mp *m, sp uintptr, signal bool) {
+func callbackUpdateSystemStack(mp *m, sp uintptr, signal bool) stack {
 	g0 := mp.g0
-
-	inBound := sp > g0.stack.lo && sp <= g0.stack.hi
-	if mp.ncgo > 0 && !inBound {
-		// ncgo > 0 indicates that this M was in Go further up the stack
-		// (it called C and is now receiving a callback).
-		//
-		// !inBound indicates that we were called with SP outside the
-		// expected system stack bounds (C changed the stack out from
-		// under us between the cgocall and cgocallback?).
-		//
-		// It is not safe for the C call to change the stack out from
-		// under us, so throw.
-
-		// Note that this case isn't possible for signal == true, as
-		// that is always passing a new M from needm.
-
-		// Stack is bogus, but reset the bounds anyway so we can print.
-		hi := g0.stack.hi
-		lo := g0.stack.lo
-		g0.stack.hi = sp + 1024
-		g0.stack.lo = sp - 32*1024
-		g0.stackguard0 = g0.stack.lo + stackGuard
-		g0.stackguard1 = g0.stackguard0
-
-		print("M ", mp.id, " procid ", mp.procid, " runtime: cgocallback with sp=", hex(sp), " out of bounds [", hex(lo), ", ", hex(hi), "]")
-		print("\n")
-		exit(2)
-	}
+	old := g0.stack
 
 	if !mp.isextra {
 		// We allocated the stack for standard Ms. Don't replace the
 		// stack bounds with estimated ones when we already initialized
 		// with the exact ones.
-		return
+		return old
 	}
 
+	// XXX rewrite this comment
 	// This M does not have Go further up the stack. However, it may have
 	// previously called into Go, initializing the stack bounds. Between
 	// that call returning and now the stack may have changed (perhaps the
@@ -306,6 +280,8 @@ func callbackUpdateSystemStack(mp *m, sp uintptr, signal bool) {
 	}
 	g0.stackguard0 = g0.stack.lo + stackGuard
 	g0.stackguard1 = g0.stackguard0
+
+	return old
 }
 
 // Call from C back to Go. fn must point to an ABIInternal Go entry-point.
@@ -319,7 +295,7 @@ func cgocallbackg(fn, frame unsafe.Pointer, ctxt uintptr) {
 	}
 
 	sp := gp.m.g0.sched.sp // system sp saved by cgocallback.
-	callbackUpdateSystemStack(gp.m, sp, false)
+	oldStack := callbackUpdateSystemStack(gp.m, sp, false)
 
 	// The call from C is on gp.m's g0 stack, so we must ensure
 	// that we stay on that M. We have to do this before calling
@@ -380,6 +356,11 @@ func cgocallbackg(fn, frame unsafe.Pointer, ctxt uintptr) {
 	reentersyscall(savedpc, uintptr(savedsp), uintptr(savedbp))
 
 	gp.m.winsyscall = winsyscall
+
+	// Restore the old g0 stack bounds
+	gp.m.g0.stack = oldStack
+	gp.m.g0.stackguard0 = oldStack.lo + stackGuard
+	gp.m.g0.stackguard1 = gp.m.g0.stackguard0
 }
 
 func cgocallbackg1(fn, frame unsafe.Pointer, ctxt uintptr) {

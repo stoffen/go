@@ -18,7 +18,14 @@ void callGoFWithDeepStack() {
 	use(&x[9999]);
 }
 
-int main() {
+void callGoWithVariousStack() {
 	GoF();                  // call GoF without using much stack
 	callGoFWithDeepStack(); // call GoF with a deep stack
+	GoF();                  // again on a shallow stack
+}
+
+int main() {
+	callGoWithVariousStack();
+
+	callGoWithVariousStackAndGoFrame();
 }

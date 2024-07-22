@@ -6,9 +6,15 @@ package main
 
 import "runtime"
 
+// extern void callGoWithVariousStack();
 import "C"
 
 func main() {}
 
 //export GoF
 func GoF() { runtime.GC() }
+
+//export callGoWithVariousStackAndGoFrame
+func callGoWithVariousStackAndGoFrame() {
+	C.callGoWithVariousStack();
+}
